@@ -361,8 +361,17 @@ Three rounds of this, so far:
   function now actually launches Chromium and runs, it just didn't finish inside the
   original 60s `maxDuration` against a heavy real site (`vercel.com`) on what was likely a
   cold start. Raised to 120s (see "Function duration and plan" above) and the matching
-  client-side timeout in `lib/hooks/use-evaluation-flow.ts`. **Not yet re-verified live** —
-  that's the next real test once this ships.
+  client-side timeout in `lib/hooks/use-evaluation-flow.ts`.
+- **Website reviewer, round 3: `page.screenshot: Timeout 30000ms exceeded`, root-caused,
+  fixed.** Re-tested live again: past both the crash and the 120s ceiling this time (the
+  function completed within budget), but `page.screenshot()` itself hit Playwright's own
+  default 30s timeout capturing `vercel.com` full-page — a genuinely tall/heavy page on a
+  Lambda-optimized Chromium build. Fixed two ways in `lib/screenshot.ts`: an explicit,
+  longer `timeout: 45_000` on the screenshot call itself, and a structural fix — page height
+  is now checked *before* screenshotting (cheap, no rendering cost) so a pathologically tall
+  page goes straight to a clipped, bounded capture instead of always attempting an unbounded
+  full-page screenshot first and only clipping it away afterward. **Not yet re-verified
+  live** — that's the next real test once this ships.
 
 **One earlier live deploy was also tested against and found running stale code:** logs
 pulled from `b4-u-pi.vercel.app` showed both the pre-fix `ANTHROPIC_API_KEY is not set`
