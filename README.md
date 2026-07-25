@@ -331,8 +331,8 @@ callout, then retest with a funded key.
 ```
 app/
   layout.tsx, page.tsx, globals.css, icon.tsx
-  deck-evaluator/page.tsx        # upload → analyzing → results
-  website-reviewer/page.tsx      # URL input → analyzing → results
+  deck-evaluator/page.tsx, layout.tsx, loading.tsx        # upload → analyzing → results
+  website-reviewer/page.tsx, layout.tsx, loading.tsx      # URL input → analyzing → results
   api/evaluate-deck/route.ts     # PDF → text extraction → Gemini → JSON
   api/evaluate-website/route.ts  # URL → Playwright capture → Gemini → JSON
 components/
@@ -341,8 +341,9 @@ components/
   evaluation/   # shared verdict card, checklist, analyzing progress, breakdown card
   deck-evaluator/, website-reviewer/   # tool-specific components
 lib/
-  anthropic.ts, pdf.ts, screenshot.ts, schemas.ts, utils.ts
-  prompts/      # system prompts + JSON schemas per tool
+  ai.ts, pdf.ts, screenshot.ts, schemas.ts, utils.ts
+  prompts/      # system prompts + user-content builders per tool (structured output is
+                 # driven by the zod schemas in schemas.ts, passed straight to generateObject)
   hooks/        # shared idle|analyzing|results|error state machine
 types/evaluation.ts
 ```
