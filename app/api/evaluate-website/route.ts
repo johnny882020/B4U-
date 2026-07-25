@@ -15,10 +15,18 @@ export const maxDuration = 60;
 const requestSchema = z.object({ url: z.string().url() });
 
 export async function POST(req: NextRequest) {
+  let url: string;
   try {
     const body = await req.json();
-    const { url } = requestSchema.parse(body);
+    ({ url } = requestSchema.parse(body));
+  } catch {
+    return NextResponse.json(
+      { error: "Enter a valid website URL (including https://) and try again." },
+      { status: 400 },
+    );
+  }
 
+  try {
     const capture = await captureAndExtract(url);
 
     const content: Array<

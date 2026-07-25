@@ -1,5 +1,5 @@
 import "server-only";
-import { chromium } from "playwright";
+import { chromium, type Browser } from "playwright-core";
 
 export interface CapturedWebsite {
   screenshotBase64: string;
@@ -15,14 +15,33 @@ export interface CapturedWebsite {
 const MAX_FULL_PAGE_HEIGHT = 8000;
 const MAX_VISIBLE_TEXT_CHARS = 8000;
 
-// Only override the executable path when explicitly configured (e.g. a
-// dev sandbox with a pre-installed browser at a nonstandard location). In
-// the production Docker image (see Dockerfile) Playwright's own bundled
-// browser resolution finds Chromium at its default install location, so
-// leaving this unset there is correct — hardcoding a sandbox-specific path
-// as the default would break that.
-async function launchBrowser() {
-  const executablePath = process.env.PLAYWRIGHT_EXECUTABLE_PATH || undefined;
+// playwright-core ships no browser of its own — an executable path is
+// always required. Two cases:
+//   - On Vercel (VERCEL is set by the platform automatically): use
+//     @sparticuz/chromium's Lambda-optimized binary, the standard pairing
+//     for running Playwright in a Vercel serverless function.
+//   - Everywhere else (local dev, this sandbox, a different host):
+//     PLAYWRIGHT_EXECUTABLE_PATH must point at a real Chromium binary —
+//     e.g. one installed locally via `npx playwright install chromium`
+//     (the `playwright` devDependency provides that CLI; it's never
+//     imported by app code, so it's not bundled into any deployed route).
+async function launchBrowser(): Promise<Browser> {
+  if (process.env.VERCEL) {
+    const { default: sparticuzChromium } = await import("@sparticuz/chromium");
+    return chromium.launch({
+      headless: true,
+      args: sparticuzChromium.args,
+      executablePath: await sparticuzChromium.executablePath(),
+    });
+  }
+
+  const executablePath = process.env.PLAYWRIGHT_EXECUTABLE_PATH;
+  if (!executablePath) {
+    throw new Error(
+      "PLAYWRIGHT_EXECUTABLE_PATH is not set. Install a browser locally with " +
+        "`npx playwright install chromium` and point this env var at it.",
+    );
+  }
   return chromium.launch({
     headless: true,
     executablePath,
