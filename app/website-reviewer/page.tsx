@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
-import { RotateCcw } from "lucide-react";
+import { AlertTriangle, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { UrlInputForm } from "@/components/website-reviewer/url-input-form";
@@ -21,11 +21,12 @@ const ANALYZING_STEPS = [
   "Finalizing recommendations...",
 ];
 
-async function evaluateWebsite(url: string): Promise<WebsiteEvaluationResult> {
+async function evaluateWebsite(url: string, signal: AbortSignal): Promise<WebsiteEvaluationResult> {
   const res = await fetch("/api/evaluate-website", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
+    signal,
   });
   const json = await res.json();
 
@@ -60,6 +61,7 @@ export default function WebsiteReviewerPage() {
       {state.status === "error" && (
         <div className="space-y-4">
           <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
             <AlertTitle>Something went wrong</AlertTitle>
             <AlertDescription>{state.message}</AlertDescription>
           </Alert>
