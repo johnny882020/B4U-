@@ -45,22 +45,33 @@ Open http://localhost:3000. `/deck-evaluator` and `/website-reviewer` are the tw
 | Variable | Required | Notes |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | Both tools call the Claude API server-side. |
-| `PLAYWRIGHT_EXECUTABLE_PATH` | No | Override the Chromium binary Playwright launches. Falls back to `/opt/pw-browsers/chromium` (this repo's sandbox default) if unset — see the deployment note below before shipping to production. |
+| `PLAYWRIGHT_EXECUTABLE_PATH` | No | Only needed to override Playwright's own bundled Chromium resolution — e.g. a sandbox with a browser pre-installed at a nonstandard path. Leave unset for local dev with `npx playwright install chromium`, and leave unset in the Docker deploy described below (the base image already provides a matching Chromium at Playwright's default location). |
 
-## Known limitation: Playwright in production
+## Deploying to Render
 
-Playwright + a full Chromium binary works for local development (and in the sandbox
-this was built in), but does **not** fit standard serverless function size/cold-start
-limits (e.g. a default Vercel deployment). Before deploying `app/api/evaluate-website`
-to a serverless target, either:
+Playwright + a full Chromium binary does not fit standard serverless function
+size/cold-start limits (e.g. a default Vercel deployment), so this repo ships a
+`Dockerfile` (based on Microsoft's official Playwright image, which includes Chromium and
+every OS-level dependency it needs, version-matched to the pinned `playwright` npm
+package) and a `render.yaml` Blueprint for a Docker-based Render Web Service.
 
-- deploy to a long-running Node host (Docker on Fly.io/Render/Railway/a VM), where a
-  normal `npx playwright install chromium` works as-is, or
-- swap to `playwright-core` + `@sparticuz/chromium` (a Lambda-optimized Chromium build)
-  for that one route.
+**One-click:** click
+[Deploy to Render](https://render.com/deploy?repo=https://github.com/johnny882020/B4U-)
+— Render reads `render.yaml` and provisions the service for you.
 
-`lib/screenshot.ts` reads the executable path from `PLAYWRIGHT_EXECUTABLE_PATH` so this
-swap is a config change, not a rewrite.
+**Manual:** in the Render dashboard, **New → Blueprint**, connect this GitHub repo, and
+Render will pick up `render.yaml` automatically (Docker runtime, health check on `/`).
+
+Either way, Render will prompt you for **`ANTHROPIC_API_KEY`** during setup (declared
+`sync: false` in `render.yaml`, so it's entered directly in Render's dashboard and never
+stored in or read from the repo). The default plan in `render.yaml` is `starter` — Render's
+free tier's RAM ceiling is tight for headless Chromium; drop it to `free` and see if it
+holds if you'd rather not pay, or bump it up if the browser capture step is slow/flaky.
+
+If you'd rather deploy Playwright some other way (a different host, or swapping to
+`playwright-core` + `@sparticuz/chromium` for a serverless target), `lib/screenshot.ts`
+reads the executable path from `PLAYWRIGHT_EXECUTABLE_PATH`, so that's a config change,
+not a rewrite.
 
 ## What's been verified
 
@@ -74,17 +85,21 @@ swap is a config change, not a rewrite.
 - Playwright itself launches correctly against the pre-installed Chromium binary in
   this sandbox.
 
-**Not verified in this environment:** a full live Claude API round-trip (no
-`ANTHROPIC_API_KEY` was available in the build sandbox) or a successful website
-screenshot capture (this sandbox's outbound network policy resets headless-browser
-connections — including direct, non-proxied ones — even to hosts that `curl` reaches
-fine; this reproduced identically with and without an explicit proxy, and with
-`ignoreHTTPSErrors` set, so it is a sandbox networking constraint, not an application
-bug). Both request paths correctly fall through to their designed error states, and
-the code itself was reviewed against the plan and current Anthropic API docs for
-correctness. **Before relying on this in production, run both tools once with a real
-`ANTHROPIC_API_KEY` in an environment with normal outbound internet access** to confirm
-the live evaluation output looks right.
+**Live-key test:** a real `ANTHROPIC_API_KEY` was tried against the deck evaluator in this
+sandbox. The key authenticated correctly and the request reached Claude cleanly — it failed
+only on a `400 "Your credit balance is too low"` from Anthropic (an account billing issue,
+not a bug), confirming the PDF-extraction → prompt → Claude-call → response-parsing path is
+wired correctly end-to-end.
+
+**Still not verified in this environment:** a full successful Claude response (blocked by
+the credit balance above, not by the code) and a successful website screenshot capture
+(this sandbox's outbound network policy resets headless-browser connections — including
+direct, non-proxied ones — even to hosts that `curl` reaches fine; reproduced identically
+with and without an explicit proxy and with `ignoreHTTPSErrors` set, so it's a sandbox
+networking constraint, not an application bug). Both request paths correctly fall through
+to their designed error states. **Before relying on this in production, run both tools once
+with a funded `ANTHROPIC_API_KEY` in an environment with normal outbound internet access**
+(e.g. right after the Render deploy above) to confirm the live evaluation output looks right.
 
 ## Project structure
 

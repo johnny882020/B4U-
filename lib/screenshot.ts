@@ -15,10 +15,14 @@ export interface CapturedWebsite {
 const MAX_FULL_PAGE_HEIGHT = 8000;
 const MAX_VISIBLE_TEXT_CHARS = 8000;
 
-const DEFAULT_SANDBOX_CHROMIUM_PATH = "/opt/pw-browsers/chromium";
-
+// Only override the executable path when explicitly configured (e.g. a
+// dev sandbox with a pre-installed browser at a nonstandard location). In
+// the production Docker image (see Dockerfile) Playwright's own bundled
+// browser resolution finds Chromium at its default install location, so
+// leaving this unset there is correct — hardcoding a sandbox-specific path
+// as the default would break that.
 async function launchBrowser() {
-  const executablePath = process.env.PLAYWRIGHT_EXECUTABLE_PATH || DEFAULT_SANDBOX_CHROMIUM_PATH;
+  const executablePath = process.env.PLAYWRIGHT_EXECUTABLE_PATH || undefined;
   return chromium.launch({
     headless: true,
     executablePath,

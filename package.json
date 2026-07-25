@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p ${PORT:-3000}",
     "lint": "next lint"
   },
   "dependencies": {
@@ -14,7 +14,7 @@
     "clsx": "^2.1.1",
     "lucide-react": "^0.469.0",
     "next": "^14.2.21",
-    "playwright": "^1.49.1",
+    "playwright": "1.62.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "server-only": "^0.0.1",
