@@ -22,15 +22,24 @@ own visual identity — it is not affiliated with, endorsed by, or built on that
 ## Stack
 
 Next.js 14 (App Router) + TypeScript + Tailwind CSS + shadcn/ui-style components, the
-Vercel AI SDK (`ai`) routed through **Vercel AI Gateway** to Claude
-(`anthropic/claude-opus-5`, structured outputs via `generateObject` against this app's own
-zod schemas) for both evaluations, `unpdf` for PDF text extraction, and `playwright-core`
+open-source Vercel AI SDK (`ai` + `@ai-sdk/anthropic`) calling Claude directly
+(`claude-opus-5`, structured outputs via `generateObject` against this app's own zod
+schemas) for both evaluations, `unpdf` for PDF text extraction, and `playwright-core`
 (Chromium) for website screenshot + text capture — paired with `@sparticuz/chromium`'s
 Lambda-optimized binary on Vercel, where a full Chromium install doesn't fit a serverless
 function.
 
 No auth, no database — every evaluation is a stateless, one-shot request; results live
 only in browser state until you refresh or start another evaluation.
+
+**On AI Gateway vs. a direct provider:** this app briefly routed through Vercel AI Gateway
+instead of calling Anthropic directly, since the gateway's own OIDC-based auth meant zero
+key management on Vercel. It moved back to a direct `@ai-sdk/anthropic` provider because AI
+Gateway requires a credit card on file in the Vercel account before it will serve *any*
+request — including using its advertised free monthly credits — which blocked every
+evaluation with a `GatewayInternalServerError` / `customer_verification_required` in
+practice. The direct provider avoids that: it bills your Anthropic account directly and only
+needs an `ANTHROPIC_API_KEY`, same as before AI Gateway was ever introduced.
 
 ## Getting started
 
@@ -39,18 +48,12 @@ npm install
 npm run dev
 ```
 
-Then give the AI Gateway something to authenticate with — `lib/ai.ts` just passes the
-model string `"anthropic/claude-opus-5"` to the AI SDK and lets the gateway resolve
-credentials itself:
+Then give the Anthropic provider something to authenticate with — `lib/ai.ts` just calls
+`anthropic("claude-opus-5")` from `@ai-sdk/anthropic`, which resolves credentials itself,
+in order: `ANTHROPIC_API_KEY` -> `ANTHROPIC_AUTH_TOKEN`:
 
-- **Recommended — link to the real Vercel project:** `npm i -g vercel` (if you don't have
-  it), `vercel login`, `vercel link` (select this project), then
-  `vercel env pull .env.local`. This writes a short-lived `VERCEL_OIDC_TOKEN` into
-  `.env.local` for you — no key to type or paste anywhere. It's valid for ~24h; re-run
-  `vercel env pull .env.local --yes` when it expires.
-- **Alternative — a static gateway key:** `cp .env.example .env.local` and set
-  `AI_GATEWAY_API_KEY` from the Vercel dashboard's AI Gateway settings. Useful for CI or
-  if you'd rather not link the project locally.
+- `cp .env.example .env.local` and set `ANTHROPIC_API_KEY` (get one from the
+  [Anthropic Console](https://console.anthropic.com/)).
 
 Open http://localhost:3000. `/deck-evaluator` and `/website-reviewer` are the two tools;
 `/` is the landing page.
@@ -59,8 +62,7 @@ Open http://localhost:3000. `/deck-evaluator` and `/website-reviewer` are the tw
 
 | Variable | Required | Notes |
 |---|---|---|
-| `VERCEL_OIDC_TOKEN` | No* | *Written automatically by `vercel env pull .env.local` (see above) — never set this by hand, and never commit it (it's short-lived, but still a real credential). Injected automatically by the platform itself on every real Vercel deployment, with zero setup. |
-| `AI_GATEWAY_API_KEY` | No* | *Only needed if you're not using `vercel link` locally, or you're running somewhere that isn't Vercel and isn't this sandbox (CI, another host). The gateway checks this before falling back to `VERCEL_OIDC_TOKEN`. |
+| `ANTHROPIC_API_KEY` | Yes | Get one from the [Anthropic Console](https://console.anthropic.com/). Set it in `.env.local` for local dev, and directly in the Vercel dashboard (Project → Settings → Environment Variables, Production environment) for deploys — never paste a real key into a chat, a commit, or any file that gets committed. |
 | `PLAYWRIGHT_EXECUTABLE_PATH` | Yes, outside Vercel | `lib/screenshot.ts` detects Vercel's own `VERCEL` env var (set automatically by the platform) and uses `@sparticuz/chromium` there — no path needed. Everywhere else (local dev, this sandbox, another host), it's required: install a browser with `npx playwright install chromium` and point this at the path it reports. |
 
 ## Deploying
@@ -82,41 +84,48 @@ instead of getting bundled (which would break their relative-path binary resolut
 **Manual:** in the Vercel dashboard, **Add New → Project**, import this GitHub repo, and
 deploy — Vercel auto-detects Next.js and handles the build.
 
-**No API key to add.** This app calls Claude through Vercel AI Gateway, not the Anthropic
-API directly (see Stack above) — on a real Vercel deployment, the platform injects a
-`VERCEL_OIDC_TOKEN` into every function invocation automatically, and the gateway
-authenticates with it. The one manual step: in the Vercel dashboard, **Project → Settings
-→ AI Gateway**, make sure AI Gateway is enabled for this project (it's on by default for
-new projects, but confirm it if evaluations fail — see the trap below). Nothing needs to
-be pasted into an environment-variable field, in this repo, or in any chat — there's no
-secret to manage here at all.
+Add **`ANTHROPIC_API_KEY`** as an environment variable **directly in the Vercel
+dashboard** — Project → Settings → Environment Variables — for the **Production**
+environment. It's read server-side only, never bundled to the client, and isn't in this
+repo.
+
+> **This key must never be pasted into a chat with an AI assistant, a commit, or any file
+> in this repo — including by Claude itself.** A chat transcript is not a secure secret
+> store. The dashboard field above is the only place it should go. If a real key was ever
+> pasted somewhere other than the Vercel dashboard, treat it as compromised and rotate it
+> from the Anthropic Console.
 
 Leave `PLAYWRIGHT_EXECUTABLE_PATH` unset on Vercel; it's not needed there.
 
 > **Common first-deploy trap:** both `/deck-evaluator` and `/website-reviewer` failing
 > with the exact same generic `"An error occurred during evaluation. Please try again."`
-> almost always means AI Gateway isn't enabled for the project (check **Settings → AI
-> Gateway**), or — much less likely, since it's zero-config by default — that Vercel isn't
-> injecting `VERCEL_OIDC_TOKEN` for some reason. Both routes share the one gateway call in
-> `lib/ai.ts`, so this is their one common failure point. (If only the website reviewer
-> fails, with a *different* message starting `"Could not load..."`, that's a
-> Playwright/capture issue instead, not credentials.) The real underlying error is always
-> visible server-side in Vercel → Deployments → the deployment → Logs, since both routes
-> `console.error` it before returning the generic message to the browser — look for
-> `GatewayAuthenticationError` specifically.
+> almost always means `ANTHROPIC_API_KEY` is missing or unfunded — both routes share the
+> one Anthropic call in `lib/ai.ts`, so this is their one common failure point. (If only
+> the website reviewer fails, with a *different* message starting `"Could not load..."`,
+> that's a Playwright/capture issue instead, not credentials.) **Also:** adding the env var
+> alone doesn't fix an already-running deployment — Vercel doesn't retroactively apply it,
+> so trigger a new deploy (dashboard "Redeploy", or push a commit) after setting it. The
+> real underlying error is always visible server-side in Vercel → Deployments → the
+> deployment → Logs, since both routes `console.error` it before returning the generic
+> message to the browser.
 
-> **Stale-deployment trap, confirmed in practice on an earlier version of this app (when
-> it still called the Anthropic API directly):** if logs ever show a literal
-> `Error: ANTHROPIC_API_KEY is not set`, or an error mentioning an `ms-playwright` cache
-> path (e.g. `.cache/ms-playwright/chromium_headless_shell-.../chrome-headless-shell`),
-> that deployment is running code from before this app migrated to AI Gateway and to
-> `playwright-core` + `@sparticuz/chromium` respectively — current code contains neither
-> code path. Fix: in the Vercel dashboard, **Settings → Git**, confirm "Production Branch"
-> is actually set to this repo's working branch, then **Deployments**, redeploy from the
-> latest commit (uncheck "Use existing Build Cache") and **promote it to Production** if
-> it isn't automatically aliased. Multiple preview URLs
-> (`<project>-<hash>-<team>.vercel.app`) are normal per-push previews — only the
-> `Production` one (no hash) needs to be current for real usage.
+> **AI Gateway billing trap, hit in practice on this app:** if logs instead show
+> `GatewayInternalServerError` / `"AI Gateway requires a valid credit card on file..."` /
+> `customer_verification_required`, that's a deployment still running the AI-Gateway-era
+> code (see "On AI Gateway vs. a direct provider" above) — current code doesn't call the
+> gateway at all, so this shouldn't happen on a fresh deploy of the latest commit. If it
+> does, it's the same stale-deployment issue described next.
+
+> **Stale-deployment trap:** if logs show a literal `Error: ANTHROPIC_API_KEY is not set`
+> (rather than a real SDK auth error), or an error mentioning an `ms-playwright` cache path
+> (e.g. `.cache/ms-playwright/chromium_headless_shell-.../chrome-headless-shell`), that
+> deployment predates this app's Playwright migration to `playwright-core` +
+> `@sparticuz/chromium` — current code contains neither code path. Fix: in the Vercel
+> dashboard, **Settings → Git**, confirm "Production Branch" is actually set to this repo's
+> working branch, then **Deployments**, redeploy from the latest commit (uncheck "Use
+> existing Build Cache") and **promote it to Production** if it isn't automatically
+> aliased. Multiple preview URLs (`<project>-<hash>-<team>.vercel.app`) are normal per-push
+> previews — only the `Production` one (no hash) needs to be current for real usage.
 
 **Function duration and plan:** both API routes declare `export const maxDuration = 60`
 (seconds). Vercel's default function timeout is 300s on all plans as of the platform's
@@ -161,7 +170,7 @@ owned by Wix) was considered and ruled out — confirmed against Base44's own do
 source, not assumed. It's a closed, prompt-first no-code app builder: its GitHub
 integration and CLI only version and deploy apps *created through* Base44's own
 templates/builder, not an arbitrary external codebase. This app's dependencies — a real
-headless Chromium process, custom Next.js API routes, AI Gateway/Claude calls — also
+headless Chromium process, custom Next.js API routes, direct Anthropic/Claude calls — also
 don't fit Base44's own backend execution model (their "functions/entities/connectors"
 abstraction, not a generic Node runtime). Deploying this exact app there isn't possible
 without rebuilding it from scratch inside Base44's builder.
@@ -218,22 +227,35 @@ That direct-API code path no longer exists in this repo (see "AI Gateway migrati
 but the result is kept here since it's still evidence the PDF/prompt-building logic upstream
 of the Claude call, which is unchanged, is correct.
 
-**AI Gateway migration:** this app was moved off the direct `@anthropic-ai/sdk` integration
-onto Vercel AI Gateway via the `ai` package (`lib/ai.ts`, previously `lib/anthropic.ts`) —
-model calls now use `generateObject` with this app's existing zod schemas
-(`lib/schemas.ts`) directly as the structured-output contract, instead of a hand-maintained
-parallel JSON Schema. This removes `ANTHROPIC_API_KEY` from the picture entirely: Vercel
-deployments authenticate automatically via the platform's own injected
-`VERCEL_OIDC_TOKEN`, with no dashboard env var to set. Verified in this sandbox:
-`npx tsc --noEmit` and `npm run build` both clean; the exact Anthropic model slug
-(`anthropic/claude-opus-5`) confirmed against the AI Gateway's live, unauthenticated
-`GET https://ai-gateway.vercel.sh/v1/models` endpoint rather than assumed; the multimodal
-message shape for the website reviewer (`{ type: "image", image, mediaType }`) confirmed
-against the `ai` package's own shipped TypeScript types rather than guessed from
-documentation. Re-ran the full request-validation pass below against the migrated code —
-identical results — and confirmed the real 6-slide test PDF now reaches the gateway call
-and fails cleanly with the SDK's own `GatewayAuthenticationError` (no `AI_GATEWAY_API_KEY`
-or `VERCEL_OIDC_TOKEN` exists in this sandbox), caught by the same try/catch as before.
+**AI Gateway migration (superseded — see next entry):** this app was briefly moved off the
+direct `@anthropic-ai/sdk` integration onto Vercel AI Gateway via the `ai` package
+(`lib/ai.ts`, previously `lib/anthropic.ts`) — model calls switched to `generateObject`
+with this app's existing zod schemas (`lib/schemas.ts`) directly as the structured-output
+contract, instead of a hand-maintained parallel JSON Schema (that part of the change is
+kept). Verified in this sandbox at the time: `npx tsc --noEmit` and `npm run build` both
+clean; the exact Anthropic model slug confirmed against the AI Gateway's live,
+unauthenticated `GET https://ai-gateway.vercel.sh/v1/models` endpoint rather than assumed;
+the multimodal message shape for the website reviewer confirmed against the `ai` package's
+own shipped TypeScript types rather than guessed from documentation.
+
+**Direct-provider reversion:** on a real deploy, AI Gateway turned out to require a credit
+card on file in the Vercel account before serving *any* request — including its advertised
+free monthly credits — which surfaced as `GatewayInternalServerError` /
+`customer_verification_required` in production logs (see the "AI Gateway billing trap"
+callout above). Moved `lib/ai.ts` to call `@ai-sdk/anthropic`'s `anthropic()` provider
+directly instead of a gateway model string — same `generateObject` + zod-schema call shape,
+so the two route files didn't need to change at all. This required bumping `ai` from the
+`^6.0.235` the AI Gateway skill's guidance had installed up to the actual current npm
+`latest` (`^7.0.37`): `@ai-sdk/anthropic`'s current release depends on a newer
+`@ai-sdk/provider` major (confirmed by inspecting both packages' `package.json`
+`dependencies` directly, not assumed) than `ai@6` ships, which surfaced immediately as a
+`tsc` type error (`LanguageModelV4` not assignable where `ai@6` expected
+`LanguageModelV2 | LanguageModelV3`) — resolved by the version bump, not by working around
+the mismatch. Re-verified after the bump: `npx tsc --noEmit` and `npm run build` both
+clean; re-ran the full request-validation pass below unchanged; the real 6-slide test PDF
+now reaches the direct-provider call and fails cleanly with `AI_LoadAPIKeyError` (this
+sandbox has no `ANTHROPIC_API_KEY`), caught by the same try/catch as before. AI Gateway is
+no longer called anywhere in this codebase.
 
 **Full request-validation pass (latest round):** every input-handling branch on both routes
 was exercised directly against a running dev server, not just read for correctness:
@@ -254,7 +276,7 @@ input in its own `try/catch`, before the block that wraps the actual Claude/Play
 A synthetic 6-slide PDF (generated directly as raw PDF syntax, since no PDF-authoring tool
 was available in this sandbox) was POSTed to `/api/evaluate-deck` end-to-end: extraction
 succeeded, slide count and text reached the prompt-building step, and the run failed only at
-the gateway call itself with `GatewayAuthenticationError` (see "AI Gateway migration"
+the Anthropic call itself with `AI_LoadAPIKeyError` (see "Direct-provider reversion"
 above) — i.e., everything up to needing real credentials is confirmed working.
 `/api/evaluate-website` was POSTed a real reachable URL (`https://example.com`) using the
 sandbox's pre-installed, version-matched Chromium (`playwright-core` 1.62.0): the browser
@@ -267,15 +289,15 @@ added, ruling out a certificate-trust issue). This is a restriction of this codi
 not of the app or of Vercel's network, and matches the same finding from the original Vercel
 migration testing.
 
-**Still not verified in this environment:** a real end-to-end Claude response through AI
-Gateway (this sandbox has neither a `VERCEL_OIDC_TOKEN` nor an `AI_GATEWAY_API_KEY` — see
-"AI Gateway migration" above for how far the request gets without one), and a real website
-screenshot capture reaching an actual public URL (blocked in this sandbox only by its own
-outbound network policy on headless-browser processes — see the request-validation section
-above). Neither gap is fixable from this sandbox; both require running against the real
-Vercel deployment. **No form of Vercel account access (dashboard login, CLI, or MCP OAuth)
-is available in this coding environment** — every deploy/promote/env-var/AI-Gateway-enable
-step described above must be performed by the account owner.
+**Still not verified in this environment:** a real end-to-end Claude response with a funded
+`ANTHROPIC_API_KEY` (this sandbox has none — see "Direct-provider reversion" above for how
+far the request gets without one), and a real website screenshot capture reaching an actual
+public URL (blocked in this sandbox only by its own outbound network policy on
+headless-browser processes — see the request-validation section above). Neither gap is
+fixable from this sandbox; both require running against the real Vercel deployment. **No
+form of Vercel account access (dashboard login, CLI, or MCP OAuth) is available in this
+coding environment** — every deploy/promote/env-var step described above must be performed
+by the account owner.
 
 **One real live deploy has been tested against, and it was running stale code:** logs
 pulled from `b4-u-pi.vercel.app` showed both the pre-fix `ANTHROPIC_API_KEY is not set`
