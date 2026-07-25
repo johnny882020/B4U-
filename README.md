@@ -78,7 +78,16 @@ app pairs `playwright-core` (no bundled browser of its own) with `@sparticuz/chr
 `lib/screenshot.ts` detects the platform's own `VERCEL` env var at runtime and switches
 code paths automatically. `next.config.mjs` marks both packages as
 `serverComponentsExternalPackages` so their binaries are `require`d natively at runtime
-instead of getting bundled (which would break their relative-path binary resolution).
+instead of getting bundled (which would break their relative-path binary resolution) —
+**and** sets `experimental.outputFileTracingIncludes` to force-include
+`@sparticuz/chromium`'s `bin/` directory (its brotli-compressed binaries) into the
+`/api/evaluate-website` function specifically. That second part isn't optional: marking
+the package external only stops *webpack* from bundling it — Vercel's separate build-time
+file tracer decides what actually ships in the function, and its static analysis doesn't
+detect `bin/`'s files as needed (they're read via a runtime-computed path, not a static
+`require()`), so without this the function throws `The input directory
+".../@sparticuz/chromium/bin" does not exist` at runtime — confirmed live in production
+before this fix (see "What's been verified" below).
 
 **One-click:** click
 [Deploy to Vercel](https://vercel.com/new/clone?repository-url=https://github.com/johnny882020/B4U-)
@@ -112,6 +121,14 @@ Leave `PLAYWRIGHT_EXECUTABLE_PATH` unset on Vercel; it's not needed there.
 > deployment → Logs, since both routes `console.error` it before returning the generic
 > message to the browser.
 
+> **`@sparticuz/chromium` bin-not-found trap, hit in practice on this app:** if the website
+> reviewer specifically fails with `Error: The input directory
+> ".../@sparticuz/chromium/bin" does not exist`, that's the file-tracing gap described
+> above — `next.config.mjs`'s `outputFileTracingIncludes` fixes it (present in current
+> code, confirmed via `.next/server/app/api/evaluate-website/route.js.nft.json` actually
+> listing the 4 `bin/*.br` files after the fix — see "What's been verified"). Seeing this
+> error means the deployment predates that fix; redeploy from the latest commit.
+
 > **Stale-deployment trap:** if logs mention `ANTHROPIC_API_KEY`, `GatewayInternalServerError`
 > / `customer_verification_required`, or an `ms-playwright` cache path (e.g.
 > `.cache/ms-playwright/chromium_headless_shell-.../chrome-headless-shell`), that deployment
@@ -131,11 +148,13 @@ plan-imposed limit — raise it in the route files if website evaluations start 
 (a Playwright screenshot capture plus a Gemini vision call can occasionally run
 long).
 
-**Function size:** `playwright-core` + `@sparticuz/chromium` together are ~81MB
-(confirmed locally via Next.js's own build output tracing — see "What's been verified"
-below). Vercel Functions on Fluid Compute now support up to 5GB of package size, so this
-was never close to a real constraint even before that increase. The `/api/evaluate-deck`
-route doesn't pull in either package at all, confirmed the same way.
+**Function size:** the `/api/evaluate-website` function traces to ~74MB total, including
+`@sparticuz/chromium`'s brotli-compressed binaries under `bin/` (the ones force-included by
+`outputFileTracingIncludes` above — measured directly off the actual files listed in
+`.next/server/app/api/evaluate-website/route.js.nft.json` after that fix, not estimated).
+Vercel Functions on Fluid Compute support up to 5GB of package size, so this is nowhere
+close to a real constraint. The `/api/evaluate-deck` route doesn't pull in `playwright-core`
+or `@sparticuz/chromium` at all, confirmed the same way.
 
 **Auto-deploy on every push:** once the GitHub repo is connected (either path above),
 Vercel's own default behavior is to build and deploy automatically on every push to the
@@ -194,9 +213,11 @@ of the capture logic (extraction, error handling, retries) is unchanged.
   Vercel migration (`playwright-core` + `@sparticuz/chromium`, `serverComponentsExternalPackages`).
 - Next.js's own build-time file tracing confirms the packaging assumptions above: the
   `/api/evaluate-website` function traces in `playwright-core` and `@sparticuz/chromium`
-  as external (not bundled) dependencies, totaling ~81MB on disk — comfortably under
-  Vercel's 250MB unzipped function limit; `/api/evaluate-deck`'s trace contains neither
-  package at all, confirming it stays lean.
+  as external (not bundled) dependencies — see the corrected, complete ~74MB figure
+  (including `@sparticuz/chromium`'s `bin/` binaries) in "Function size" above and in the
+  bin-not-found bug entry below; `/api/evaluate-deck`'s trace contains neither package at
+  all, confirming it stays lean. Both comfortably under Vercel's 5GB Fluid Compute package
+  size limit either way.
 - `playwright-core` (no bundled browser) confirmed able to launch and control a real
   Chromium instance directly (standalone script, then again through the actual Next.js
   route) — the non-Vercel fallback path works.
@@ -308,17 +329,31 @@ added, ruling out a certificate-trust issue). This is a restriction of this codi
 not of the app or of Vercel's network, and matches the same finding from the original Vercel
 migration testing.
 
-**Still not verified in this environment:** a real end-to-end Gemini response with a
-`GOOGLE_GENERATIVE_AI_API_KEY` (this sandbox has none — see "Gemini migration" above for how
-far the request gets without one), and a real website screenshot capture reaching an actual
-public URL (blocked in this sandbox only by its own outbound network policy on
-headless-browser processes — see the request-validation section above). Neither gap is
-fixable from this sandbox; both require running against the real Vercel deployment. **No
-form of Vercel account access (dashboard login, CLI, or MCP OAuth) is available in this
-coding environment** — every deploy/promote/env-var step described above must be performed
-by the account owner.
+**Live production verification:** this sandbox has no Vercel account access (dashboard
+login, CLI, or MCP OAuth) and never has — every deploy/promote/env-var step in this doc
+must be performed by the account owner. But the deployed app's public API routes are just
+normal internet endpoints, so once a deployment is live, `curl`-ing
+`https://b4-u-pi.vercel.app/api/evaluate-deck` and `/api/evaluate-website` directly from
+this sandbox *is* a real, direct production test — no account access needed for that part.
+Two rounds of this, so far:
 
-**One real live deploy has been tested against, and it was running stale code:** logs
+- **Deck evaluator: passed.** A real POST with a real multi-slide PDF returned `200` with a
+  coherent, accurate, well-structured evaluation (correct slide count, content grounded in
+  the actual deck text, sensible confidence levels) — the first fully successful live
+  result across every architecture this app has gone through.
+- **Website reviewer: failed, then fixed.** First live test returned `500`. The Vercel logs
+  (shared by the account owner, since this sandbox can't read them directly) showed
+  `Error: The input directory ".../@sparticuz/chromium/bin" does not exist` — the
+  file-tracing gap described above, not a credentials or capture-logic problem. Fixed via
+  `outputFileTracingIncludes`, confirmed empirically (not just assumed fixed) by rebuilding
+  and inspecting `.next/server/app/api/evaluate-website/route.js.nft.json` directly: 0 of
+  `@sparticuz/chromium`'s `bin/*.br` files were listed before the fix, all 4 are listed
+  after, and `/api/evaluate-deck`'s trace file confirmed to still have zero
+  Playwright/Chromium files leaking in (the fix is scoped to the one route that needs it).
+  **Not yet re-verified live** — this fix hasn't had a fresh deployment tested against it
+  yet; that's the next real test once this ships.
+
+**One earlier live deploy was also tested against and found running stale code:** logs
 pulled from `b4-u-pi.vercel.app` showed both the pre-fix `ANTHROPIC_API_KEY is not set`
 string and the pre-migration `ms-playwright` cache-path error described in the
 "Stale-deployment trap" callout above — meaning that deployment predated both fixes in this
