@@ -47,7 +47,9 @@ Open http://localhost:3000. `/deck-evaluator` and `/website-reviewer` are the tw
 | `ANTHROPIC_API_KEY` | Yes | Both tools call the Claude API server-side. |
 | `PLAYWRIGHT_EXECUTABLE_PATH` | No | Only needed to override Playwright's own bundled Chromium resolution — e.g. a sandbox with a browser pre-installed at a nonstandard path. Leave unset for local dev with `npx playwright install chromium`, and leave unset in the Docker deploy described below (the base image already provides a matching Chromium at Playwright's default location). |
 
-## Deploying to Render
+## Deploying
+
+### Render (current, verified target)
 
 Playwright + a full Chromium binary does not fit standard serverless function
 size/cold-start limits (e.g. a default Vercel deployment), so this repo ships a
@@ -68,6 +70,42 @@ stored in or read from the repo). The default plan in `render.yaml` is `starter`
 free tier's RAM ceiling is tight for headless Chromium; drop it to `free` and see if it
 holds if you'd rather not pay, or bump it up if the browser capture step is slow/flaky.
 
+**Auto-deploy on every push:** once the GitHub repo is connected (either path above),
+Render's own default behavior is to redeploy automatically on every push to the connected
+branch — no extra CI/CD, webhook, or MCP glue needed for that. This is a one-time manual
+connection step (Render requires the account owner's own login), after which every future
+push here keeps the live deployment in sync on its own.
+
+### Why not Base44?
+
+Base44 (the platform `deck-evaluator.grovevc.com` and `base4u.tech` are built on, now
+owned by Wix) was considered and ruled out — confirmed against Base44's own docs and CLI
+source, not assumed. It's a closed, prompt-first no-code app builder: its GitHub
+integration and CLI only version and deploy apps *created through* Base44's own
+templates/builder, not an arbitrary external codebase. This app's dependencies — a real
+headless Chromium process via Playwright, custom Next.js API routes, direct Anthropic SDK
+calls — also don't fit Base44's own backend execution model (their "functions/entities/
+connectors" abstraction, not a generic Node runtime). Deploying this exact app there isn't
+possible without rebuilding it from scratch inside Base44's builder.
+
+### Alternatives to Render considered
+
+| Platform | Docker/Playwright fit | MCP connector available | Notes |
+|---|---|---|---|
+| **Render** (current) | Good | No | Already fully set up, tested, and verified in this repo. |
+| **Railway** | Good | **Yes** | The one alternative here with an actual MCP connector — the only option where deploys/logs could be driven directly from a Claude chat instead of the Render dashboard. Worth switching to if that matters more than staying on the already-working setup. |
+| **Fly.io** | Good | No | Popular for exactly this kind of Docker + headless-browser app; generous free allowance. No MCP integration. |
+| **Google Cloud Run** | Good (any container) | No | Scales to zero, pay-per-request; more setup overhead (gcloud CLI, IAM) than Render/Railway/Fly. |
+| **Vercel** | Poor | Yes | Same serverless size/cold-start problem as noted above — would need `playwright-core` + `@sparticuz/chromium` and a route-by-route rework, not a config swap. |
+| **Netlify** | Poor | Yes | Functions-based, same fundamental mismatch with a full Chromium process as Vercel. |
+
+No Render MCP connector exists in the current connector registry (checked directly), so
+"auto-deploy on Render via MCP" specifically isn't available — Render's own push-triggered
+auto-deploy (above) is the closest equivalent once the account is connected. If having
+Claude actually drive deploys/logs from chat matters, Railway is the closest fit that
+supports it; ask and this repo's Dockerfile/render.yaml pattern can be adapted to a
+`railway.json` with minimal changes.
+
 If you'd rather deploy Playwright some other way (a different host, or swapping to
 `playwright-core` + `@sparticuz/chromium` for a serverless target), `lib/screenshot.ts`
 reads the executable path from `PLAYWRIGHT_EXECUTABLE_PATH`, so that's a config change,
@@ -84,6 +122,10 @@ not a rewrite.
   empty submission returns "Pitch deck required".
 - Playwright itself launches correctly against the pre-installed Chromium binary in
   this sandbox.
+- Re-verified after later changes with a full `npm run build` + `npm run start` production
+  smoke test: `/`, `/deck-evaluator`, `/website-reviewer`, and `/icon` all return 200, and
+  the deck API's three validation paths (empty submission, no API key, over-20-slide deck)
+  all still return their exact intended messages.
 
 **Live-key test:** a real `ANTHROPIC_API_KEY` was tried against the deck evaluator in this
 sandbox. The key authenticated correctly and the request reached Claude cleanly — it failed
