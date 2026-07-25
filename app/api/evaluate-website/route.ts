@@ -9,7 +9,13 @@ import {
 } from "@/lib/prompts/website-evaluation";
 import { websiteEvaluationResultSchema } from "@/lib/schemas";
 
-export const maxDuration = 60;
+// Higher than /api/evaluate-deck's: a cold-start @sparticuz/chromium launch
+// (brotli-decompressing a ~65MB binary on first invocation) plus a full-page
+// screenshot of a heavy site plus a Gemini vision call can genuinely exceed
+// 60s -- confirmed live in production (FUNCTION_INVOCATION_TIMEOUT at 60s on
+// a cold start against vercel.com). Vercel's default function timeout is
+// 300s on all plans, so this has real headroom to work with.
+export const maxDuration = 120;
 
 const requestSchema = z.object({ url: z.string().url() });
 
