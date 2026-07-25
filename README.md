@@ -33,9 +33,15 @@ only in browser state until you refresh or start another evaluation.
 
 ```bash
 npm install
-cp .env.example .env.local   # then set ANTHROPIC_API_KEY
 npm run dev
 ```
+
+Then authenticate the Claude API however you prefer — no code change needed either way,
+`lib/anthropic.ts` just calls `new Anthropic()` and lets the SDK resolve credentials itself:
+
+- **`ant` CLI (recommended for local dev):** `ant auth login` once; the SDK picks up the
+  resulting profile automatically, no env var needed.
+- **API key:** `cp .env.example .env.local` and set `ANTHROPIC_API_KEY`.
 
 Open http://localhost:3000. `/deck-evaluator` and `/website-reviewer` are the two tools;
 `/` is the landing page.
@@ -44,7 +50,7 @@ Open http://localhost:3000. `/deck-evaluator` and `/website-reviewer` are the tw
 
 | Variable | Required | Notes |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Yes | Both tools call the Claude API server-side. |
+| `ANTHROPIC_API_KEY` | No* | *Not required if you've run `ant auth login` (see above) — but production/Render can't do an interactive CLI login (see the Render section below), so an API key (or `ANTHROPIC_AUTH_TOKEN`) is the practical choice there. |
 | `PLAYWRIGHT_EXECUTABLE_PATH` | No | Only needed to override Playwright's own bundled Chromium resolution — e.g. a sandbox with a browser pre-installed at a nonstandard path. Leave unset for local dev with `npx playwright install chromium`, and leave unset in the Docker deploy described below (the base image already provides a matching Chromium at Playwright's default location). |
 
 ## Deploying
