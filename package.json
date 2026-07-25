@@ -9,7 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.20",
+    "@ai-sdk/google": "^4.0.24",
     "@sparticuz/chromium": "149.0.0",
     "ai": "^7.0.37",
     "class-variance-authority": "^0.7.1",
