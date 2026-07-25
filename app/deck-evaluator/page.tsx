@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
-import { RotateCcw } from "lucide-react";
+import { AlertTriangle, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { DeckUploadDropzone } from "@/components/deck-evaluator/deck-upload-dropzone";
@@ -21,11 +21,11 @@ const ANALYZING_STEPS = [
   "Finalizing recommendations...",
 ];
 
-async function evaluateDeck(file: File): Promise<DeckEvaluationResult> {
+async function evaluateDeck(file: File, signal: AbortSignal): Promise<DeckEvaluationResult> {
   const formData = new FormData();
   formData.append("file", file);
 
-  const res = await fetch("/api/evaluate-deck", { method: "POST", body: formData });
+  const res = await fetch("/api/evaluate-deck", { method: "POST", body: formData, signal });
   const json = await res.json();
 
   if (!res.ok) {
@@ -59,6 +59,7 @@ export default function DeckEvaluatorPage() {
       {state.status === "error" && (
         <div className="space-y-4">
           <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
             <AlertTitle>Something went wrong</AlertTitle>
             <AlertDescription>{state.message}</AlertDescription>
           </Alert>

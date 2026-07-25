@@ -13,7 +13,7 @@ const HOW_IT_WORKS = [
   {
     icon: Sparkles,
     title: "AI analysis",
-    description: "Claude reviews it the way an early-stage investor would — objectively, against a fixed framework.",
+    description: "Our AI reviews it the way an early-stage investor would — objectively, against a fixed framework.",
   },
   {
     icon: ClipboardList,
@@ -36,9 +36,11 @@ export default function HomePage() {
       </section>
 
       <section className="mt-14 grid gap-6 sm:grid-cols-2">
-        <Card className="flex flex-col">
+        <Card className="flex flex-col transition-shadow hover:shadow-md">
           <CardHeader>
-            <FileText className="h-8 w-8 text-primary" />
+            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/5">
+              <FileText className="h-6 w-6 text-primary" />
+            </div>
             <CardTitle className="mt-2">Pitch Deck Evaluator</CardTitle>
             <CardDescription>
               Upload your pitch deck and get a slide-by-slide breakdown, an investment-readiness
@@ -52,9 +54,11 @@ export default function HomePage() {
           </CardContent>
         </Card>
 
-        <Card className="flex flex-col">
+        <Card className="flex flex-col transition-shadow hover:shadow-md">
           <CardHeader>
-            <Globe className="h-8 w-8 text-primary" />
+            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/5">
+              <Globe className="h-6 w-6 text-primary" />
+            </div>
             <CardTitle className="mt-2">AI Investor Website Reviewer</CardTitle>
             <CardDescription>
               Enter your site URL and see it the way an investor would — value proposition,
