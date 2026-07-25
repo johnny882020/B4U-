@@ -73,9 +73,18 @@ instead of getting bundled (which would break their relative-path binary resolut
 **Manual:** in the Vercel dashboard, **Add New → Project**, import this GitHub repo, and
 deploy — Vercel auto-detects Next.js and handles the build.
 
-Either way, add **`ANTHROPIC_API_KEY`** as an environment variable in the Vercel project
-settings (Project → Settings → Environment Variables) before or right after the first
-deploy — it's read server-side only, never bundled to the client, and isn't in this repo.
+Either way, add **`ANTHROPIC_API_KEY`** as an environment variable **directly in the
+Vercel dashboard** — Project → Settings → Environment Variables — for the **Production**
+environment. It's read server-side only, never bundled to the client, and isn't in this
+repo.
+
+> **This key must never be pasted into a chat with an AI assistant, a commit, or any file
+> in this repo — including by Claude itself.** A chat transcript is not a secure secret
+> store; anything typed there should be treated as potentially logged. The dashboard field
+> above is the only place it should go. If a real key was ever pasted somewhere other than
+> the Vercel dashboard (chat, a commit, a screenshot), treat it as compromised and rotate
+> it from the Anthropic Console.
+
 Leave `PLAYWRIGHT_EXECUTABLE_PATH` unset on Vercel; it's not needed there.
 
 > **Common first-deploy trap, confirmed in practice:** both `/deck-evaluator` and
@@ -90,16 +99,33 @@ Leave `PLAYWRIGHT_EXECUTABLE_PATH` unset on Vercel; it's not needed there.
 > visible server-side in Vercel → Deployments → the deployment → Logs, since both routes
 > `console.error` it before returning the generic message to the browser.
 
+> **Stale-deployment trap, also confirmed in practice:** if the logs show the literal
+> string `Error: ANTHROPIC_API_KEY is not set`, that is the *old*, pre-fix error text —
+> current code (since the "Stop hard-requiring ANTHROPIC_API_KEY" commit) never throws
+> that message; it lets the Anthropic SDK's own credential resolution fail instead. And if
+> the website-reviewer error mentions a `ms-playwright` cache path (e.g.
+> `.cache/ms-playwright/chromium_headless_shell-.../chrome-headless-shell`), that's the
+> *old*, pre-migration full-`playwright` lookup — current code uses `playwright-core` +
+> `@sparticuz/chromium` and never touches that path. Seeing either string means the
+> deployment being tested predates both fixes, regardless of whether the env var is set
+> now. Fix: in the Vercel dashboard, **Settings → Git**, confirm "Production Branch" is
+> actually set to this repo's working branch, then **Deployments**, redeploy from the
+> latest commit (uncheck "Use existing Build Cache") and **promote it to Production** if
+> it isn't automatically aliased. Multiple preview URLs
+> (`<project>-<hash>-<team>.vercel.app`) are normal per-push previews — only the
+> `Production` one (no hash) needs to be current for real usage.
+
 **Function duration and plan:** both API routes declare `export const maxDuration = 60`
-(seconds) — Vercel's Hobby plan hard-caps at 60s without Fluid Compute, or up to 300s
-with it (Fluid Compute is the default for new projects as of this writing, but check your
-project's setting); Pro allows up to 300s directly. If website evaluations are timing out,
-that's the first thing to check — a Playwright screenshot capture plus a Claude Opus 5
-vision call can occasionally run close to that ceiling.
+(seconds). Vercel's default function timeout is 300s on all plans as of the platform's
+Fluid Compute rollout, so 60s is a deliberate, conservative ceiling here, not a
+plan-imposed limit — raise it in the route files if website evaluations start timing out
+(a Playwright screenshot capture plus a Claude Opus 5 vision call can occasionally run
+long).
 
 **Function size:** `playwright-core` + `@sparticuz/chromium` together are ~81MB
 (confirmed locally via Next.js's own build output tracing — see "What's been verified"
-below), comfortably under Vercel's 250MB unzipped function limit. The `/api/evaluate-deck`
+below). Vercel Functions on Fluid Compute now support up to 5GB of package size, so this
+was never close to a real constraint even before that increase. The `/api/evaluate-deck`
 route doesn't pull in either package at all, confirmed the same way.
 
 **Auto-deploy on every push:** once the GitHub repo is connected (either path above),
@@ -185,18 +211,55 @@ only on a `400 "Your credit balance is too low"` from Anthropic (an account bill
 not a bug), confirming the PDF-extraction → prompt → Claude-call → response-parsing path is
 wired correctly end-to-end.
 
-**Still not verified in this environment:** an actual live deploy on Vercel itself (no
-Vercel account/credentials available here — see "On 'deploy via MCP'" above), a full
-successful Claude response (blocked by the credit balance above, not by the code), and a
-successful website screenshot capture against a real reachable URL (this sandbox's
-outbound network policy resets headless-browser connections — including direct,
-non-proxied ones — even to hosts that `curl` reaches fine; reproduced identically with and
-without an explicit proxy, with `ignoreHTTPSErrors` set, and now again with the
-`@sparticuz/chromium` binary specifically, so it's consistently a sandbox networking
-constraint, not an application bug — confirmed via the route returning the exact intended
-"Could not load..." error rather than crashing). **Before relying on this in production,
-run both tools once with a funded `ANTHROPIC_API_KEY` right after the Vercel deploy above**
-to confirm the live evaluation output looks right.
+**Full request-validation pass (latest round):** every input-handling branch on both routes
+was exercised directly against a running dev server, not just read for correctness:
+
+| Request | Before this round | Now |
+|---|---|---|
+| No file on `/api/evaluate-deck` | `400 "Pitch deck required"` | unchanged |
+| Non-PDF file on `/api/evaluate-deck` | `500` generic message (bug — this is a client input error) | `400 "That file doesn't look like a valid PDF..."` |
+| Real multi-slide PDF | reaches the Claude call correctly | unchanged, re-confirmed |
+| Missing/invalid `url` on `/api/evaluate-website` (absent field, non-URL string, unparseable JSON body) | `500` generic message (bug) | `400 "Enter a valid website URL (including https://) and try again."` |
+| Valid `url`, unreachable page | `500 "Could not load..."` | unchanged |
+
+The two `500`-for-bad-input cases were genuine bugs (client validation errors were falling
+through into the generic server-error catch block instead of returning `400`) — fixed in
+both `app/api/evaluate-deck/route.ts` and `app/api/evaluate-website/route.ts` by validating
+input in its own `try/catch`, before the block that wraps the actual Claude/Playwright call.
+
+A synthetic 6-slide PDF (generated directly as raw PDF syntax, since no PDF-authoring tool
+was available in this sandbox) was POSTed to `/api/evaluate-deck` end-to-end: extraction
+succeeded, slide count and text reached the prompt-building step, and the run failed only at
+the Claude call itself with the SDK's own `"Could not resolve authentication method..."`
+error — i.e., everything up to needing real credentials is confirmed working.
+`/api/evaluate-website` was POSTed a real reachable URL (`https://example.com`) using the
+sandbox's pre-installed, version-matched Chromium (`playwright-core` 1.62.0): the browser
+launched and attempted navigation correctly, but the connection itself was reset — isolated
+with a standalone script to be this sandbox's outbound network policy blocking the headless
+browser process specifically (`curl` and Node's own `fetch` reach the same URL from the same
+sandbox without issue; the browser fails identically with no proxy, with an explicit
+`--proxy-server` pointed at the sandbox's own proxy, and with `--ignore-certificate-errors`
+added, ruling out a certificate-trust issue). This is a restriction of this coding sandbox,
+not of the app or of Vercel's network, and matches the same finding from the original Vercel
+migration testing.
+
+**Still not verified in this environment:** a real end-to-end Claude response against a live
+`ANTHROPIC_API_KEY` (blocked in this sandbox only by an account credit balance, not by the
+code — see the live-key test above), and a real website screenshot capture reaching an
+actual public URL (blocked in this sandbox only by its own outbound network policy on
+headless-browser processes — see the request-validation section above). Neither of these
+gaps is fixable from this sandbox; both require running against the real Vercel deployment.
+**No form of Vercel account access (dashboard login, CLI, or MCP OAuth) is available in this
+coding environment** — every deploy/promote/env-var step described above must be performed
+by the account owner.
+
+**One real live deploy has been tested against, and it was running stale code:** logs
+pulled from `b4-u-pi.vercel.app` showed both the pre-fix `ANTHROPIC_API_KEY is not set`
+string and the pre-migration `ms-playwright` cache-path error described in the
+"Stale-deployment trap" callout above — meaning that deployment predated both fixes in this
+repo's history, independent of whether the env var was ever set. **Before concluding either
+tool is broken on a live deployment, first rule out a stale build** using the steps in that
+callout, then retest with a funded key.
 
 ## Project structure
 

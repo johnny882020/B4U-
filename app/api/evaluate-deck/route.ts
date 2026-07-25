@@ -24,19 +24,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Pitch deck required" }, { status: 400 });
   }
 
+  let pageCount: number;
+  let slideText: string;
   try {
     const buffer = await file.arrayBuffer();
-    const { pageCount, slideText } = await extractPdfText(buffer);
+    ({ pageCount, slideText } = await extractPdfText(buffer));
+  } catch (err) {
+    console.error("evaluate-deck pdf parse error", err);
+    return NextResponse.json(
+      { error: "That file doesn't look like a valid PDF. Please upload a PDF pitch deck." },
+      { status: 400 },
+    );
+  }
 
-    if (pageCount > MAX_DECK_PAGES) {
-      return NextResponse.json(
-        {
-          error: `This deck has ${pageCount} slides — the evaluator supports decks up to ${MAX_DECK_PAGES} slides. Trim it and try again.`,
-        },
-        { status: 400 },
-      );
-    }
+  if (pageCount > MAX_DECK_PAGES) {
+    return NextResponse.json(
+      {
+        error: `This deck has ${pageCount} slides — the evaluator supports decks up to ${MAX_DECK_PAGES} slides. Trim it and try again.`,
+      },
+      { status: 400 },
+    );
+  }
 
+  try {
     const result = await generateStructuredEvaluation<DeckEvaluationResult>({
       system: DECK_EVALUATION_SYSTEM_PROMPT,
       content: buildDeckEvaluationUserContent({ slideText, pageCount }),
