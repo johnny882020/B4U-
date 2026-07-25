@@ -78,6 +78,18 @@ settings (Project → Settings → Environment Variables) before or right after 
 deploy — it's read server-side only, never bundled to the client, and isn't in this repo.
 Leave `PLAYWRIGHT_EXECUTABLE_PATH` unset on Vercel; it's not needed there.
 
+> **Common first-deploy trap, confirmed in practice:** both `/deck-evaluator` and
+> `/website-reviewer` failing with the exact same generic `"An error occurred during
+> evaluation. Please try again."` almost always means `ANTHROPIC_API_KEY` is missing (or
+> unfunded) — both routes share the one Claude client in `lib/anthropic.ts`, so this is
+> their one common failure point. (If only the website reviewer fails, with a *different*
+> message starting `"Could not load..."`, that's a Playwright/capture issue instead, not
+> credentials.) **Also:** adding the env var alone doesn't fix an already-running
+> deployment — Vercel doesn't retroactively apply it, so trigger a new deploy (dashboard
+> "Redeploy", or push a commit) after setting it. The real underlying error is always
+> visible server-side in Vercel → Deployments → the deployment → Logs, since both routes
+> `console.error` it before returning the generic message to the browser.
+
 **Function duration and plan:** both API routes declare `export const maxDuration = 60`
 (seconds) — Vercel's Hobby plan hard-caps at 60s without Fluid Compute, or up to 300s
 with it (Fluid Compute is the default for new projects as of this writing, but check your
