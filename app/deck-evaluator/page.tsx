@@ -26,7 +26,17 @@ async function evaluateDeck(file: File, signal: AbortSignal): Promise<DeckEvalua
   formData.append("file", file);
 
   const res = await fetch("/api/evaluate-deck", { method: "POST", body: formData, signal });
-  const json = await res.json();
+
+  // A platform-level failure (e.g. a proxy timeout) can return a plain-text
+  // or HTML error page instead of the JSON our own route always returns —
+  // parse defensively so that shows a clean message, not a raw parse error.
+  const text = await res.text();
+  let json: { error?: string } = {};
+  try {
+    json = JSON.parse(text);
+  } catch {
+    // fall through to the generic message below
+  }
 
   if (!res.ok) {
     throw new Error(json.error ?? "An error occurred during evaluation. Please try again.");
