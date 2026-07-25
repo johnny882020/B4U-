@@ -14,6 +14,11 @@ export interface CapturedWebsite {
 
 const MAX_FULL_PAGE_HEIGHT = 8000;
 const MAX_VISIBLE_TEXT_CHARS = 8000;
+// Playwright's own default page.screenshot() timeout is 30s, which a
+// full-page capture of a genuinely tall/heavy real-world page can exceed on
+// a Lambda-optimized Chromium build -- confirmed live in production
+// (`page.screenshot: Timeout 30000ms exceeded` capturing vercel.com).
+const SCREENSHOT_TIMEOUT_MS = 45_000;
 
 // playwright-core ships no browser of its own — an executable path is
 // always required. Two cases:
@@ -70,25 +75,25 @@ export async function captureAndExtract(url: string): Promise<CapturedWebsite> {
       }
     }
 
-    const screenshotBuffer = await page.screenshot({
-      fullPage: true,
-      type: "png",
-      clip: undefined,
-    });
-
-    // Guard against pathologically tall pages inflating the image beyond
-    // useful token cost — re-capture clipped to a max height if needed.
-    let finalBuffer = screenshotBuffer;
+    // Check page height first (cheap, no rendering cost) so pathologically
+    // tall pages never pay for an unbounded full-page capture just to have
+    // it clipped away afterward — capture at the right size the first time.
     const box = await page.evaluate(() => ({
       height: document.documentElement.scrollHeight,
       width: document.documentElement.scrollWidth,
     }));
-    if (box.height > MAX_FULL_PAGE_HEIGHT) {
-      finalBuffer = await page.screenshot({
-        type: "png",
-        clip: { x: 0, y: 0, width: Math.min(box.width, 1440), height: MAX_FULL_PAGE_HEIGHT },
-      });
-    }
+    const finalBuffer =
+      box.height > MAX_FULL_PAGE_HEIGHT
+        ? await page.screenshot({
+            type: "png",
+            timeout: SCREENSHOT_TIMEOUT_MS,
+            clip: { x: 0, y: 0, width: Math.min(box.width, 1440), height: MAX_FULL_PAGE_HEIGHT },
+          })
+        : await page.screenshot({
+            fullPage: true,
+            type: "png",
+            timeout: SCREENSHOT_TIMEOUT_MS,
+          });
 
     const extracted = await page.evaluate((maxChars) => {
       const getMeta = (selector: string) =>
