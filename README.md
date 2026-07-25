@@ -341,7 +341,8 @@ must be performed by the account owner. But the deployed app's public API routes
 normal internet endpoints, so once a deployment is live, `curl`-ing
 `https://b4-u-pi.vercel.app/api/evaluate-deck` and `/api/evaluate-website` directly from
 this sandbox *is* a real, direct production test — no account access needed for that part.
-Three rounds of this, so far:
+Several rounds of this, so far — culminating in a genuine end-to-end success for both
+tools:
 
 - **Deck evaluator: passed.** A real POST with a real multi-slide PDF returned `200` with a
   coherent, accurate, well-structured evaluation (correct slide count, content grounded in
@@ -370,8 +371,27 @@ Three rounds of this, so far:
   longer `timeout: 45_000` on the screenshot call itself, and a structural fix — page height
   is now checked *before* screenshotting (cheap, no rendering cost) so a pathologically tall
   page goes straight to a clipped, bounded capture instead of always attempting an unbounded
-  full-page screenshot first and only clipping it away afterward. **Not yet re-verified
-  live** — that's the next real test once this ships.
+  full-page screenshot first and only clipping it away afterward.
+- **Website reviewer, round 4: passed against a typical site; `vercel.com` specifically
+  still times out, and that's being accepted as a known limit rather than chased further.**
+  Re-tested live against `https://example.com` (deliberately lighter than `vercel.com`, to
+  separate "is the pipeline broken" from "is this one page unusually heavy"): `200` in
+  15.8s, with a coherent, accurate, well-structured review — **first fully successful live
+  result for both tools**, on realistic input. `https://vercel.com` — an unusually
+  heavy, animation- and JS-rich marketing page — still hit `504
+  FUNCTION_INVOCATION_TIMEOUT` even with the round-2 and round-3 fixes in place, meaning the
+  full pipeline (cold-start Chromium + navigation + screenshot + Gemini vision call) for
+  that specific page exceeds the 120s ceiling. Deliberately not raising the timeout further
+  to chase it: this app reviews a solo founder's *own* site, not arbitrary large marketing
+  sites, and a synchronous browser wait past ~2 minutes is already a poor experience
+  regardless of whether the backend eventually succeeds. Surfaced one genuinely general bug
+  while investigating this, fixed in both `app/deck-evaluator/page.tsx` and
+  `app/website-reviewer/page.tsx`: a platform-level timeout like this returns a plain-text
+  error page, not JSON, and the client was calling `res.json()` unconditionally — a raw
+  parse error instead of the clean message it was supposed to show. Now parses the response
+  body defensively (`res.text()` then a guarded `JSON.parse`) so *any* non-JSON failure
+  response — this one included — falls back to the same clean generic error message instead
+  of a confusing raw exception.
 
 **One earlier live deploy was also tested against and found running stale code:** logs
 pulled from `b4-u-pi.vercel.app` showed both the pre-fix `ANTHROPIC_API_KEY is not set`
