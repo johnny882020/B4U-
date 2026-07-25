@@ -141,12 +141,18 @@ Leave `PLAYWRIGHT_EXECUTABLE_PATH` unset on Vercel; it's not needed there.
 > `Production` one (no hash) needs to be current for real usage. If in doubt, an empty
 > commit (`git commit --allow-empty`) forces a guaranteed-fresh build.
 
-**Function duration and plan:** both API routes declare `export const maxDuration = 60`
-(seconds). Vercel's default function timeout is 300s on all plans as of the platform's
-Fluid Compute rollout, so 60s is a deliberate, conservative ceiling here, not a
-plan-imposed limit — raise it in the route files if website evaluations start timing out
-(a Playwright screenshot capture plus a Gemini vision call can occasionally run
-long).
+**Function duration and plan:** `/api/evaluate-deck` declares `maxDuration = 60` (seconds);
+`/api/evaluate-website` declares `maxDuration = 120`. Vercel's default function timeout is
+300s on all plans as of the platform's Fluid Compute rollout, so neither is a plan-imposed
+limit — both are deliberate, conservative ceilings below that default, raised only as far as
+observed need requires. The website route's higher ceiling isn't precautionary: it was hit
+in practice — a cold-start `@sparticuz/chromium` launch (brotli-decompressing a ~65MB
+binary on the function's first invocation) plus a full-page screenshot of a heavy site plus
+a Gemini vision call took long enough to trip the original 60s limit
+(`FUNCTION_INVOCATION_TIMEOUT`, confirmed live in production against `vercel.com`). Raise it
+further in the route file (and the matching client-side `MAX_ANALYZING_MS` in
+`lib/hooks/use-evaluation-flow.ts`, which must stay above whichever server route's ceiling
+is higher) if it's still not enough.
 
 **Function size:** the `/api/evaluate-website` function traces to ~74MB total, including
 `@sparticuz/chromium`'s brotli-compressed binaries under `bin/` (the ones force-included by
@@ -335,23 +341,28 @@ must be performed by the account owner. But the deployed app's public API routes
 normal internet endpoints, so once a deployment is live, `curl`-ing
 `https://b4-u-pi.vercel.app/api/evaluate-deck` and `/api/evaluate-website` directly from
 this sandbox *is* a real, direct production test — no account access needed for that part.
-Two rounds of this, so far:
+Three rounds of this, so far:
 
 - **Deck evaluator: passed.** A real POST with a real multi-slide PDF returned `200` with a
   coherent, accurate, well-structured evaluation (correct slide count, content grounded in
   the actual deck text, sensible confidence levels) — the first fully successful live
   result across every architecture this app has gone through.
-- **Website reviewer: failed, then fixed.** First live test returned `500`. The Vercel logs
-  (shared by the account owner, since this sandbox can't read them directly) showed
-  `Error: The input directory ".../@sparticuz/chromium/bin" does not exist` — the
-  file-tracing gap described above, not a credentials or capture-logic problem. Fixed via
-  `outputFileTracingIncludes`, confirmed empirically (not just assumed fixed) by rebuilding
-  and inspecting `.next/server/app/api/evaluate-website/route.js.nft.json` directly: 0 of
+- **Website reviewer, round 1: `500`, root-caused, fixed.** The Vercel logs (shared by the
+  account owner, since this sandbox can't read them directly) showed `Error: The input
+  directory ".../@sparticuz/chromium/bin" does not exist` — the file-tracing gap described
+  above, not a credentials or capture-logic problem. Fixed via `outputFileTracingIncludes`,
+  confirmed empirically (not just assumed fixed) by rebuilding and inspecting
+  `.next/server/app/api/evaluate-website/route.js.nft.json` directly: 0 of
   `@sparticuz/chromium`'s `bin/*.br` files were listed before the fix, all 4 are listed
   after, and `/api/evaluate-deck`'s trace file confirmed to still have zero
   Playwright/Chromium files leaking in (the fix is scoped to the one route that needs it).
-  **Not yet re-verified live** — this fix hasn't had a fresh deployment tested against it
-  yet; that's the next real test once this ships.
+- **Website reviewer, round 2: `504 FUNCTION_INVOCATION_TIMEOUT`, different failure,
+  progress.** Re-tested live after shipping the fix above: no longer the same crash — the
+  function now actually launches Chromium and runs, it just didn't finish inside the
+  original 60s `maxDuration` against a heavy real site (`vercel.com`) on what was likely a
+  cold start. Raised to 120s (see "Function duration and plan" above) and the matching
+  client-side timeout in `lib/hooks/use-evaluation-flow.ts`. **Not yet re-verified live** —
+  that's the next real test once this ships.
 
 **One earlier live deploy was also tested against and found running stale code:** logs
 pulled from `b4-u-pi.vercel.app` showed both the pre-fix `ANTHROPIC_API_KEY is not set`

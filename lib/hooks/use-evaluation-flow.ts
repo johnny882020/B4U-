@@ -9,11 +9,14 @@ export type EvaluationFlowState<TResult> =
   | { status: "error"; message: string };
 
 const MIN_ANALYZING_MS = 4000;
-// Server routes cap at `maxDuration = 60` (seconds). This must stay above
-// that with some buffer, or a slow-but-successful evaluation gets aborted
-// client-side and shown as a false error before the server would have
-// returned a real result.
-const MAX_ANALYZING_MS = 65000;
+// Sized for the slower of the two server routes: /api/evaluate-website caps
+// at `maxDuration = 120` (seconds) to cover a cold-start Chromium launch +
+// screenshot + vision call. This must stay above that with some buffer, or
+// a slow-but-successful evaluation gets aborted client-side and shown as a
+// false error before the server would have returned a real result. Harmless
+// for /api/evaluate-deck (capped at 60s server-side, so it always resolves
+// well before this ever fires).
+const MAX_ANALYZING_MS = 130000;
 
 export function useEvaluationFlow<TInput, TResult>(
   run: (input: TInput, signal: AbortSignal) => Promise<TResult>,
