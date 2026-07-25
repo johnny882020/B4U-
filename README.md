@@ -22,8 +22,8 @@ own visual identity — it is not affiliated with, endorsed by, or built on that
 ## Stack
 
 Next.js 14 (App Router) + TypeScript + Tailwind CSS + shadcn/ui-style components, the
-open-source Vercel AI SDK (`ai` + `@ai-sdk/anthropic`) calling Claude directly
-(`claude-opus-5`, structured outputs via `generateObject` against this app's own zod
+open-source Vercel AI SDK (`ai` + `@ai-sdk/google`) calling Google Gemini directly
+(`gemini-flash-latest`, structured outputs via `generateObject` against this app's own zod
 schemas) for both evaluations, `unpdf` for PDF text extraction, and `playwright-core`
 (Chromium) for website screenshot + text capture — paired with `@sparticuz/chromium`'s
 Lambda-optimized binary on Vercel, where a full Chromium install doesn't fit a serverless
@@ -32,14 +32,17 @@ function.
 No auth, no database — every evaluation is a stateless, one-shot request; results live
 only in browser state until you refresh or start another evaluation.
 
-**On AI Gateway vs. a direct provider:** this app briefly routed through Vercel AI Gateway
-instead of calling Anthropic directly, since the gateway's own OIDC-based auth meant zero
-key management on Vercel. It moved back to a direct `@ai-sdk/anthropic` provider because AI
-Gateway requires a credit card on file in the Vercel account before it will serve *any*
-request — including using its advertised free monthly credits — which blocked every
-evaluation with a `GatewayInternalServerError` / `customer_verification_required` in
-practice. The direct provider avoids that: it bills your Anthropic account directly and only
-needs an `ANTHROPIC_API_KEY`, same as before AI Gateway was ever introduced.
+**Why Gemini, and not Claude:** this app was originally built on Claude
+(`@anthropic-ai/sdk`, then AI Gateway, then a direct `@ai-sdk/anthropic` provider — see
+"What's been verified" below for that full history). Each Anthropic-based setup worked
+*architecturally* but was ultimately blocked by account billing: no standing free API tier,
+and the connected account's credit balance ran out in production
+(`"Your credit balance is too low to access the Anthropic API"`). Gemini's Flash tier has a
+genuine no-credit-card-required free quota via [Google AI
+Studio](https://aistudio.google.com/apikey), and — critically for the website reviewer —
+still supports multimodal (image + text) input and structured JSON output through the same
+`generateObject` + zod-schema call shape, so switching providers didn't require touching
+either route file, only `lib/ai.ts`.
 
 ## Getting started
 
@@ -48,12 +51,12 @@ npm install
 npm run dev
 ```
 
-Then give the Anthropic provider something to authenticate with — `lib/ai.ts` just calls
-`anthropic("claude-opus-5")` from `@ai-sdk/anthropic`, which resolves credentials itself,
-in order: `ANTHROPIC_API_KEY` -> `ANTHROPIC_AUTH_TOKEN`:
+Then give the Gemini provider something to authenticate with — `lib/ai.ts` just calls
+`google("gemini-flash-latest")` from `@ai-sdk/google`, which resolves credentials from the
+`GOOGLE_GENERATIVE_AI_API_KEY` environment variable:
 
-- `cp .env.example .env.local` and set `ANTHROPIC_API_KEY` (get one from the
-  [Anthropic Console](https://console.anthropic.com/)).
+- `cp .env.example .env.local` and set `GOOGLE_GENERATIVE_AI_API_KEY` (get a free one from
+  [Google AI Studio](https://aistudio.google.com/apikey) — no credit card required).
 
 Open http://localhost:3000. `/deck-evaluator` and `/website-reviewer` are the two tools;
 `/` is the landing page.
@@ -62,7 +65,7 @@ Open http://localhost:3000. `/deck-evaluator` and `/website-reviewer` are the tw
 
 | Variable | Required | Notes |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Yes | Get one from the [Anthropic Console](https://console.anthropic.com/). Set it in `.env.local` for local dev, and directly in the Vercel dashboard (Project → Settings → Environment Variables, Production environment) for deploys — never paste a real key into a chat, a commit, or any file that gets committed. |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Yes | Get a free key from [Google AI Studio](https://aistudio.google.com/apikey) — no credit card required. Set it in `.env.local` for local dev, and directly in the Vercel dashboard (Project → Settings → Environment Variables, Production environment) for deploys — never paste a real key into a chat, a commit, or any file that gets committed. |
 | `PLAYWRIGHT_EXECUTABLE_PATH` | Yes, outside Vercel | `lib/screenshot.ts` detects Vercel's own `VERCEL` env var (set automatically by the platform) and uses `@sparticuz/chromium` there — no path needed. Everywhere else (local dev, this sandbox, another host), it's required: install a browser with `npx playwright install chromium` and point this at the path it reports. |
 
 ## Deploying
@@ -84,7 +87,7 @@ instead of getting bundled (which would break their relative-path binary resolut
 **Manual:** in the Vercel dashboard, **Add New → Project**, import this GitHub repo, and
 deploy — Vercel auto-detects Next.js and handles the build.
 
-Add **`ANTHROPIC_API_KEY`** as an environment variable **directly in the Vercel
+Add **`GOOGLE_GENERATIVE_AI_API_KEY`** as an environment variable **directly in the Vercel
 dashboard** — Project → Settings → Environment Variables — for the **Production**
 environment. It's read server-side only, never bundled to the client, and isn't in this
 repo.
@@ -93,14 +96,14 @@ repo.
 > in this repo — including by Claude itself.** A chat transcript is not a secure secret
 > store. The dashboard field above is the only place it should go. If a real key was ever
 > pasted somewhere other than the Vercel dashboard, treat it as compromised and rotate it
-> from the Anthropic Console.
+> from [Google AI Studio](https://aistudio.google.com/apikey).
 
 Leave `PLAYWRIGHT_EXECUTABLE_PATH` unset on Vercel; it's not needed there.
 
 > **Common first-deploy trap:** both `/deck-evaluator` and `/website-reviewer` failing
 > with the exact same generic `"An error occurred during evaluation. Please try again."`
-> almost always means `ANTHROPIC_API_KEY` is missing or unfunded — both routes share the
-> one Anthropic call in `lib/ai.ts`, so this is their one common failure point. (If only
+> almost always means `GOOGLE_GENERATIVE_AI_API_KEY` is missing — both routes share the
+> one Gemini call in `lib/ai.ts`, so this is their one common failure point. (If only
 > the website reviewer fails, with a *different* message starting `"Could not load..."`,
 > that's a Playwright/capture issue instead, not credentials.) **Also:** adding the env var
 > alone doesn't fix an already-running deployment — Vercel doesn't retroactively apply it,
@@ -109,29 +112,23 @@ Leave `PLAYWRIGHT_EXECUTABLE_PATH` unset on Vercel; it's not needed there.
 > deployment → Logs, since both routes `console.error` it before returning the generic
 > message to the browser.
 
-> **AI Gateway billing trap, hit in practice on this app:** if logs instead show
-> `GatewayInternalServerError` / `"AI Gateway requires a valid credit card on file..."` /
-> `customer_verification_required`, that's a deployment still running the AI-Gateway-era
-> code (see "On AI Gateway vs. a direct provider" above) — current code doesn't call the
-> gateway at all, so this shouldn't happen on a fresh deploy of the latest commit. If it
-> does, it's the same stale-deployment issue described next.
-
-> **Stale-deployment trap:** if logs show a literal `Error: ANTHROPIC_API_KEY is not set`
-> (rather than a real SDK auth error), or an error mentioning an `ms-playwright` cache path
-> (e.g. `.cache/ms-playwright/chromium_headless_shell-.../chrome-headless-shell`), that
-> deployment predates this app's Playwright migration to `playwright-core` +
-> `@sparticuz/chromium` — current code contains neither code path. Fix: in the Vercel
-> dashboard, **Settings → Git**, confirm "Production Branch" is actually set to this repo's
-> working branch, then **Deployments**, redeploy from the latest commit (uncheck "Use
-> existing Build Cache") and **promote it to Production** if it isn't automatically
-> aliased. Multiple preview URLs (`<project>-<hash>-<team>.vercel.app`) are normal per-push
-> previews — only the `Production` one (no hash) needs to be current for real usage.
+> **Stale-deployment trap:** if logs mention `ANTHROPIC_API_KEY`, `GatewayInternalServerError`
+> / `customer_verification_required`, or an `ms-playwright` cache path (e.g.
+> `.cache/ms-playwright/chromium_headless_shell-.../chrome-headless-shell`), that deployment
+> predates the Gemini migration (or the AI Gateway/Playwright migrations before it) — current
+> code contains none of those code paths. Fix: in the Vercel dashboard, **Settings → Git**,
+> confirm "Production Branch" is actually set to this repo's working branch, then
+> **Deployments**, redeploy from the latest commit (uncheck "Use existing Build Cache") and
+> **promote it to Production** if it isn't automatically aliased. Multiple preview URLs
+> (`<project>-<hash>-<team>.vercel.app`) are normal per-push previews — only the
+> `Production` one (no hash) needs to be current for real usage. If in doubt, an empty
+> commit (`git commit --allow-empty`) forces a guaranteed-fresh build.
 
 **Function duration and plan:** both API routes declare `export const maxDuration = 60`
 (seconds). Vercel's default function timeout is 300s on all plans as of the platform's
 Fluid Compute rollout, so 60s is a deliberate, conservative ceiling here, not a
 plan-imposed limit — raise it in the route files if website evaluations start timing out
-(a Playwright screenshot capture plus a Claude Opus 5 vision call can occasionally run
+(a Playwright screenshot capture plus a Gemini vision call can occasionally run
 long).
 
 **Function size:** `playwright-core` + `@sparticuz/chromium` together are ~81MB
@@ -257,6 +254,28 @@ now reaches the direct-provider call and fails cleanly with `AI_LoadAPIKeyError`
 sandbox has no `ANTHROPIC_API_KEY`), caught by the same try/catch as before. AI Gateway is
 no longer called anywhere in this codebase.
 
+**Gemini migration (current):** even the direct Anthropic provider above was blocked in
+production — not by code, but by the connected Anthropic account's credit balance running
+out (`AI_APICallError`, `"Your credit balance is too low to access the Anthropic API"`,
+confirmed live against `https://api.anthropic.com/v1/messages` with a correctly-resolved
+key and model, i.e. everything upstream of Anthropic's own billing check was proven
+correct). Anthropic has no standing free API tier, so `lib/ai.ts` was moved to
+`@ai-sdk/google`'s `google()` provider (`gemini-flash-latest`), which has a genuine
+no-credit-card-required free quota via Google AI Studio and still supports the multimodal
+image+text input the website reviewer needs, plus structured JSON output — same
+`generateObject` + zod-schema call shape as the Anthropic version, so the route files
+didn't change. `@ai-sdk/anthropic` was uninstalled; `@ai-sdk/google` depends on the same
+`@ai-sdk/provider@4.0.3` already pulled in by `ai@7`, confirmed via `npm view ... dependencies`
+before installing rather than assumed, so no further version bump was needed. Verified in
+this sandbox: `npx tsc --noEmit` and `npm run build` both clean; full request-validation
+pass re-run with identical results; the real test PDF now reaches the Gemini call and fails
+cleanly with `AI_LoadAPIKeyError` from `@ai-sdk/google` (this sandbox has no
+`GOOGLE_GENERATIVE_AI_API_KEY`), caught by the same error handling as every provider before
+it. Not verified here: an actual successful Gemini response (needs a real, funded-or-free
+key against a live Vercel deployment) and Gemini's actual output quality/comparability to
+Claude for this specific structured-evaluation task — worth a side-by-side read of a real
+result once a key is live.
+
 **Full request-validation pass (latest round):** every input-handling branch on both routes
 was exercised directly against a running dev server, not just read for correctness:
 
@@ -271,13 +290,13 @@ was exercised directly against a running dev server, not just read for correctne
 The two `500`-for-bad-input cases were genuine bugs (client validation errors were falling
 through into the generic server-error catch block instead of returning `400`) — fixed in
 both `app/api/evaluate-deck/route.ts` and `app/api/evaluate-website/route.ts` by validating
-input in its own `try/catch`, before the block that wraps the actual Claude/Playwright call.
+input in its own `try/catch`, before the block that wraps the actual Gemini/Playwright call.
 
 A synthetic 6-slide PDF (generated directly as raw PDF syntax, since no PDF-authoring tool
 was available in this sandbox) was POSTed to `/api/evaluate-deck` end-to-end: extraction
 succeeded, slide count and text reached the prompt-building step, and the run failed only at
-the Anthropic call itself with `AI_LoadAPIKeyError` (see "Direct-provider reversion"
-above) — i.e., everything up to needing real credentials is confirmed working.
+the Gemini call itself with `AI_LoadAPIKeyError` (see "Gemini migration" above) — i.e.,
+everything up to needing real credentials is confirmed working.
 `/api/evaluate-website` was POSTed a real reachable URL (`https://example.com`) using the
 sandbox's pre-installed, version-matched Chromium (`playwright-core` 1.62.0): the browser
 launched and attempted navigation correctly, but the connection itself was reset — isolated
@@ -289,8 +308,8 @@ added, ruling out a certificate-trust issue). This is a restriction of this codi
 not of the app or of Vercel's network, and matches the same finding from the original Vercel
 migration testing.
 
-**Still not verified in this environment:** a real end-to-end Claude response with a funded
-`ANTHROPIC_API_KEY` (this sandbox has none — see "Direct-provider reversion" above for how
+**Still not verified in this environment:** a real end-to-end Gemini response with a
+`GOOGLE_GENERATIVE_AI_API_KEY` (this sandbox has none — see "Gemini migration" above for how
 far the request gets without one), and a real website screenshot capture reaching an actual
 public URL (blocked in this sandbox only by its own outbound network policy on
 headless-browser processes — see the request-validation section above). Neither gap is
@@ -314,8 +333,8 @@ app/
   layout.tsx, page.tsx, globals.css, icon.tsx
   deck-evaluator/page.tsx        # upload → analyzing → results
   website-reviewer/page.tsx      # URL input → analyzing → results
-  api/evaluate-deck/route.ts     # PDF → text extraction → Claude → JSON
-  api/evaluate-website/route.ts  # URL → Playwright capture → Claude → JSON
+  api/evaluate-deck/route.ts     # PDF → text extraction → Gemini → JSON
+  api/evaluate-website/route.ts  # URL → Playwright capture → Gemini → JSON
 components/
   shell/        # header, footer, B4U logo badge
   ui/           # shadcn-style primitives
