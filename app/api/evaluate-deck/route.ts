@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { extractPdfText } from "@/lib/pdf";
-import { generateStructuredEvaluation } from "@/lib/anthropic";
+import { generateStructuredEvaluation } from "@/lib/ai";
 import {
   DECK_EVALUATION_SYSTEM_PROMPT,
   buildDeckEvaluationUserContent,
-  deckEvaluationJsonSchema,
 } from "@/lib/prompts/deck-evaluation";
 import { deckEvaluationResultSchema } from "@/lib/schemas";
-import { MAX_DECK_PAGES, type DeckEvaluationResult } from "@/types/evaluation";
+import { MAX_DECK_PAGES } from "@/types/evaluation";
 
 export const maxDuration = 60;
 
@@ -47,15 +46,13 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const result = await generateStructuredEvaluation<DeckEvaluationResult>({
+    const result = await generateStructuredEvaluation({
       system: DECK_EVALUATION_SYSTEM_PROMPT,
       content: buildDeckEvaluationUserContent({ slideText, pageCount }),
-      schema: deckEvaluationJsonSchema,
+      schema: deckEvaluationResultSchema,
     });
 
-    const validated = deckEvaluationResultSchema.parse(result);
-
-    return NextResponse.json(validated);
+    return NextResponse.json(result);
   } catch (err) {
     console.error("evaluate-deck error", err);
     return NextResponse.json(

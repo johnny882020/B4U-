@@ -1,14 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import type { UserContent } from "ai";
 import { captureAndExtract } from "@/lib/screenshot";
-import { generateStructuredEvaluation } from "@/lib/anthropic";
+import { generateStructuredEvaluation } from "@/lib/ai";
 import {
   WEBSITE_EVALUATION_SYSTEM_PROMPT,
   buildWebsiteEvaluationTextContent,
-  websiteEvaluationJsonSchema,
 } from "@/lib/prompts/website-evaluation";
 import { websiteEvaluationResultSchema } from "@/lib/schemas";
-import type { WebsiteEvaluationResult } from "@/types/evaluation";
 
 export const maxDuration = 60;
 
@@ -29,13 +28,11 @@ export async function POST(req: NextRequest) {
   try {
     const capture = await captureAndExtract(url);
 
-    const content: Array<
-      | { type: "image"; source: { type: "base64"; media_type: "image/png"; data: string } }
-      | { type: "text"; text: string }
-    > = [
+    const content: UserContent = [
       {
         type: "image",
-        source: { type: "base64", media_type: "image/png", data: capture.screenshotBase64 },
+        image: capture.screenshotBase64,
+        mediaType: "image/png",
       },
       {
         type: "text",
@@ -43,15 +40,13 @@ export async function POST(req: NextRequest) {
       },
     ];
 
-    const result = await generateStructuredEvaluation<WebsiteEvaluationResult>({
+    const result = await generateStructuredEvaluation({
       system: WEBSITE_EVALUATION_SYSTEM_PROMPT,
       content,
-      schema: websiteEvaluationJsonSchema,
+      schema: websiteEvaluationResultSchema,
     });
 
-    const validated = websiteEvaluationResultSchema.parse(result);
-
-    return NextResponse.json(validated);
+    return NextResponse.json(result);
   } catch (err) {
     console.error("evaluate-website error", err);
     const message =
